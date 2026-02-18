@@ -1,0 +1,114 @@
+import { inject, ConfigurationError, Configuration } from '@stravigor/kernel'
+import { AnthropicProvider } from './providers/anthropic_provider.ts'
+import { OpenAIProvider } from './providers/openai_provider.ts'
+import type {
+  AIProvider,
+  BrainConfig,
+  ProviderConfig,
+  CompletionRequest,
+  CompletionResponse,
+  BeforeHook,
+  AfterHook,
+} from './types.ts'
+
+/**
+ * Central AI configuration hub.
+ *
+ * Resolved once via the DI container — reads the AI config
+ * and initializes the appropriate provider drivers.
+ *
+ * @example
+ * app.singleton(BrainManager)
+ * app.resolve(BrainManager)
+ *
+ * // Plug in a custom provider
+ * BrainManager.useProvider(new OllamaProvider())
+ */
+@inject
+export default class BrainManager {
+  private static _config: BrainConfig
+  private static _providers = new Map<string, AIProvider>()
+  private static _beforeHooks: BeforeHook[] = []
+  private static _afterHooks: AfterHook[] = []
+
+  constructor(config: Configuration) {
+    BrainManager._config = {
+      default: config.get('ai.default', 'anthropic') as string,
+      providers: config.get('ai.providers', {}) as Record<string, ProviderConfig>,
+      maxTokens: config.get('ai.maxTokens', 4096) as number,
+      temperature: config.get('ai.temperature', 0.7) as number,
+      maxIterations: config.get('ai.maxIterations', 10) as number,
+    }
+
+    for (const [name, providerConfig] of Object.entries(BrainManager._config.providers)) {
+      BrainManager._providers.set(name, BrainManager.createProvider(name, providerConfig))
+    }
+  }
+
+  private static createProvider(name: string, config: ProviderConfig): AIProvider {
+    const driver = config.driver ?? name
+    switch (driver) {
+      case 'anthropic':
+        return new AnthropicProvider(config)
+      case 'openai':
+        return new OpenAIProvider(config, name)
+      default:
+        throw new ConfigurationError(
+          `Unknown AI provider driver: ${driver}. Use BrainManager.useProvider() for custom providers.`
+        )
+    }
+  }
+
+  static get config(): BrainConfig {
+    if (!BrainManager._config) {
+      throw new ConfigurationError(
+        'BrainManager not configured. Resolve it through the container first.'
+      )
+    }
+    return BrainManager._config
+  }
+
+  /** Get a provider by name, or the default provider. */
+  static provider(name?: string): AIProvider {
+    const key = name ?? BrainManager._config.default
+    const p = BrainManager._providers.get(key)
+    if (!p) throw new ConfigurationError(`AI provider "${key}" not configured.`)
+    return p
+  }
+
+  /** Swap or add a provider at runtime (e.g., for testing or a custom provider). */
+  static useProvider(provider: AIProvider): void {
+    BrainManager._providers.set(provider.name, provider)
+  }
+
+  /** Register a hook that runs before every completion. */
+  static before(hook: BeforeHook): void {
+    BrainManager._beforeHooks.push(hook)
+  }
+
+  /** Register a hook that runs after every completion. */
+  static after(hook: AfterHook): void {
+    BrainManager._afterHooks.push(hook)
+  }
+
+  /**
+   * Run a completion through the named provider, with before/after hooks.
+   * Used internally by AgentRunner and the `brain` helper.
+   */
+  static async complete(
+    providerName: string | undefined,
+    request: CompletionRequest
+  ): Promise<CompletionResponse> {
+    for (const hook of BrainManager._beforeHooks) await hook(request)
+    const response = await BrainManager.provider(providerName).complete(request)
+    for (const hook of BrainManager._afterHooks) await hook(request, response)
+    return response
+  }
+
+  /** Clear all providers and hooks (for testing). */
+  static reset(): void {
+    BrainManager._providers.clear()
+    BrainManager._beforeHooks = []
+    BrainManager._afterHooks = []
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "@stravigor/brain",
+  "version": "0.5.6",
+  "type": "module",
+  "description": "AI module for the Strav framework",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "files": [
+    "src/",
+    "package.json",
+    "tsconfig.json",
+    "CHANGELOG.md"
+  ],
+  "peerDependencies": {
+    "@stravigor/kernel": "workspace:*",
+    "@stravigor/workflow": "workspace:*"
+  },
+  "dependencies": {
+    "zod": "^3.25 || ^4.0"
+  },
+  "scripts": {
+    "test": "bun test tests/",
+    "typecheck": "tsc --noEmit"
+  }
+}
