@@ -358,7 +358,7 @@ const thread = brain.thread(SupportAgent)
 const reply = await thread.send('I need help with my order')
 ```
 
-### Persistence
+### Basic persistence
 
 Serialize a thread for storage (database, session, cache) and restore later:
 
@@ -390,10 +390,219 @@ for await (const chunk of thread.stream('What tools do you have?')) {
 thread.system('prompt')           // set/override system prompt
 thread.using('openai', 'gpt-4o') // override provider
 thread.tools([searchTool])        // set available tools
+thread.memory()                   // enable memory management (see below)
+thread.memory({ strategy: 'summarize', maxContextTokens: 180000 })
+thread.id('thread-123')           // set thread ID for persistence
+thread.persist()                  // enable auto-persistence to ThreadStore
 thread.send('message')            // send and get response (handles tool calls)
 thread.stream('message')          // stream response (handles tool calls)
 thread.getMessages()              // get copy of message history
+thread.facts                      // access semantic memory (if memory enabled)
+thread.episodicSummary            // current conversation summary (if memory enabled)
+thread.serializeMemory()          // serialize with memory state
+thread.restoreMemory(data)        // restore with memory state
 thread.clear()                    // reset conversation
+```
+
+## Memory management
+
+Long-running conversations will eventually exceed the model's context window. The memory system solves this with a three-tier architecture:
+
+- **Working memory** — recent messages that fit within the context budget
+- **Episodic memory** — LLM-generated summaries of compacted older messages
+- **Semantic memory** — structured facts extracted from conversation
+
+Memory is **opt-in** — without calling `.memory()`, threads behave exactly as before.
+
+### Enabling memory
+
+```typescript
+const thread = brain.thread(OrchestratorAgent)
+  .memory()  // enable with defaults from config
+
+// Or with per-thread overrides
+const thread = brain.thread()
+  .system('You are an entrepreneurship advisor.')
+  .memory({
+    maxContextTokens: 180000,  // budget (default: auto-detect from model)
+    strategy: 'summarize',     // 'summarize' or 'sliding_window'
+    responseReserve: 0.20,     // fraction reserved for model response
+    minWorkingMessages: 4,     // never compact below this many messages
+    compactionBatchSize: 10,   // oldest messages to compact per cycle
+    extractFacts: true,        // extract structured facts during compaction
+  })
+```
+
+When memory is enabled, `thread.send()` and `thread.stream()` automatically:
+
+1. Check if the current messages fit within the token budget
+2. If over budget, compact the oldest messages using the configured strategy
+3. Inject the episodic summary and semantic facts into the system prompt
+4. Send only the trimmed working messages to the model
+
+### Compaction strategies
+
+**Summarize** (default) — Uses the thread's own LLM to generate a natural-language summary of compacted messages. When an existing summary is present, it merges rather than creating a chain of summaries. Optionally extracts structured facts.
+
+**Sliding window** — Drops oldest messages without summarization. No LLM call required. Use when you want fast, predictable compaction and don't need continuity from older messages.
+
+```typescript
+// Use sliding window for speed
+thread.memory({ strategy: 'sliding_window' })
+```
+
+### Semantic memory (facts)
+
+Facts are key-value pairs representing stable knowledge about the user and their situation. They are injected into the system prompt as a `<known_facts>` block so the model always has access to critical context regardless of compaction.
+
+```typescript
+const thread = brain.thread().memory()
+
+// Set facts explicitly
+thread.facts!.set('venture_type', 'SaaS logistics platform')
+thread.facts!.set('current_stage', 'Validation')
+
+// Facts are also extracted automatically during compaction (when extractFacts: true)
+
+// Read facts
+thread.facts!.get('venture_type')  // { key, value, source, confidence, createdAt, updatedAt }
+thread.facts!.all()                // all facts as array
+thread.facts!.remove('old_fact')   // remove a fact
+```
+
+The model sees:
+
+```
+<known_facts>
+- venture_type: SaaS logistics platform
+- current_stage: Validation
+</known_facts>
+```
+
+### Thread persistence
+
+For long-running conversations that span multiple sessions, use the `ThreadStore` interface with `serializeMemory()` / `restoreMemory()`:
+
+```typescript
+import { InMemoryThreadStore } from '@stravigor/brain'
+import BrainManager from '@stravigor/brain'
+
+// Register a thread store (use InMemoryThreadStore for dev, DatabaseThreadStore for production)
+BrainManager.useThreadStore(new InMemoryThreadStore())
+
+// Create a persistent thread
+const thread = brain.thread(OrchestratorAgent)
+  .id('user-123-thread')
+  .memory({ strategy: 'summarize', extractFacts: true })
+  .persist()  // auto-save after each send()
+
+await thread.send('I have an idea for a logistics SaaS')
+// Thread is automatically saved to the store
+
+// On next session — restore
+const saved = await BrainManager.threadStore!.load('user-123-thread')
+if (saved) {
+  const thread = brain.thread(OrchestratorAgent)
+    .memory()
+    .restoreMemory(saved)
+
+  await thread.send('What were we discussing?')
+  // Model has access to summary + facts from previous sessions
+}
+```
+
+`serializeMemory()` captures messages, system prompt, episodic summary, and semantic facts. `restoreMemory()` restores all of it.
+
+### Custom thread store
+
+Implement the `ThreadStore` interface for database-backed persistence:
+
+```typescript
+import type { ThreadStore, SerializedMemoryThread } from '@stravigor/brain'
+
+class DatabaseThreadStore implements ThreadStore {
+  async save(thread: SerializedMemoryThread): Promise<void> {
+    await db.query(`
+      INSERT INTO threads (id, data, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = NOW()
+    `, [thread.id, JSON.stringify(thread)])
+  }
+
+  async load(id: string): Promise<SerializedMemoryThread | null> {
+    const row = await db.query('SELECT data FROM threads WHERE id = $1', [id])
+    return row ? JSON.parse(row.data) : null
+  }
+
+  async delete(id: string): Promise<void> {
+    await db.query('DELETE FROM threads WHERE id = $1', [id])
+  }
+
+  async list(options?: { limit?: number; offset?: number }): Promise<SerializedMemoryThread[]> {
+    const rows = await db.query(
+      'SELECT data FROM threads ORDER BY updated_at DESC LIMIT $1 OFFSET $2',
+      [options?.limit ?? 50, options?.offset ?? 0]
+    )
+    return rows.map((r: any) => JSON.parse(r.data))
+  }
+}
+
+BrainManager.useThreadStore(new DatabaseThreadStore())
+```
+
+### Custom compaction strategy
+
+Implement the `CompactionStrategy` interface:
+
+```typescript
+import type { CompactionStrategy } from '@stravigor/brain'
+
+const customStrategy: CompactionStrategy = {
+  name: 'custom',
+  async compact(messages, options) {
+    // Your custom logic here
+    return {
+      summary: 'Custom summary of the conversation...',
+      facts: [{ key: 'topic', value: 'logistics', source: 'extracted', confidence: 0.9, createdAt: '', updatedAt: '' }],
+      summaryTokens: 10,
+    }
+  },
+}
+```
+
+### Memory configuration
+
+Add to `config/ai.ts`:
+
+```typescript
+export default {
+  default: 'anthropic',
+  providers: { /* ... */ },
+  maxTokens: 4096,
+  temperature: 0.7,
+  maxIterations: 10,
+
+  memory: {
+    maxContextTokens: 180000,   // leave headroom from 200k window
+    strategy: 'summarize',      // 'summarize' | 'sliding_window'
+    responseReserve: 0.20,      // 20% reserved for model response
+    minWorkingMessages: 4,      // always keep at least 4 recent messages
+    compactionBatchSize: 10,    // compact 10 oldest messages per cycle
+    extractFacts: true,         // extract structured facts during compaction
+  },
+}
+```
+
+### Token counting
+
+The `TokenCounter` utility provides approximate token estimation (~4 chars/token) without external dependencies:
+
+```typescript
+import { TokenCounter } from '@stravigor/brain'
+
+TokenCounter.estimate('Hello, world!')                      // ~4 tokens
+TokenCounter.estimateMessages(thread.getMessages())          // total for message array
+TokenCounter.contextWindow('claude-sonnet-4-20250514')       // 200000
 ```
 
 ## Workflows

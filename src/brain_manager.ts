@@ -10,6 +10,7 @@ import type {
   BeforeHook,
   AfterHook,
 } from './types.ts'
+import type { MemoryConfig, ThreadStore } from './memory/types.ts'
 
 /**
  * Central AI configuration hub.
@@ -30,6 +31,8 @@ export default class BrainManager {
   private static _providers = new Map<string, AIProvider>()
   private static _beforeHooks: BeforeHook[] = []
   private static _afterHooks: AfterHook[] = []
+  private static _threadStore: ThreadStore | null = null
+  private static _memoryConfig: MemoryConfig = {}
 
   constructor(config: Configuration) {
     BrainManager._config = {
@@ -39,6 +42,8 @@ export default class BrainManager {
       temperature: config.get('ai.temperature', 0.7) as number,
       maxIterations: config.get('ai.maxIterations', 10) as number,
     }
+
+    BrainManager._memoryConfig = config.get('ai.memory', {}) as MemoryConfig
 
     for (const [name, providerConfig] of Object.entries(BrainManager._config.providers)) {
       BrainManager._providers.set(name, BrainManager.createProvider(name, providerConfig))
@@ -81,6 +86,21 @@ export default class BrainManager {
     BrainManager._providers.set(provider.name, provider)
   }
 
+  /** Get the configured memory settings. */
+  static get memoryConfig(): MemoryConfig {
+    return BrainManager._memoryConfig
+  }
+
+  /** Get the registered thread store, if any. */
+  static get threadStore(): ThreadStore | null {
+    return BrainManager._threadStore
+  }
+
+  /** Register a thread store for persistence (e.g., DatabaseThreadStore). */
+  static useThreadStore(store: ThreadStore): void {
+    BrainManager._threadStore = store
+  }
+
   /** Register a hook that runs before every completion. */
   static before(hook: BeforeHook): void {
     BrainManager._beforeHooks.push(hook)
@@ -105,10 +125,12 @@ export default class BrainManager {
     return response
   }
 
-  /** Clear all providers and hooks (for testing). */
+  /** Clear all providers, hooks, and stores (for testing). */
   static reset(): void {
     BrainManager._providers.clear()
     BrainManager._beforeHooks = []
     BrainManager._afterHooks = []
+    BrainManager._threadStore = null
+    BrainManager._memoryConfig = {}
   }
 }

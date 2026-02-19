@@ -171,6 +171,7 @@ export interface BrainConfig {
   maxTokens: number
   temperature: number
   maxIterations: number
+  memory?: import('./memory/types.ts').MemoryConfig
 }
 
 // ── Serialized Thread ────────────────────────────────────────────────────────

@@ -2,6 +2,10 @@ import BrainManager from './brain_manager.ts'
 import { Agent } from './agent.ts'
 import { Workflow } from './workflow.ts'
 import { zodToJsonSchema } from './utils/schema.ts'
+import { MemoryManager } from './memory/memory_manager.ts'
+import { ContextBudget } from './memory/context_budget.ts'
+import type { MemoryConfig, SerializedMemoryThread, Fact } from './memory/types.ts'
+import type { SemanticMemory } from './memory/semantic_memory.ts'
 import type {
   AIProvider,
   CompletionRequest,
@@ -592,6 +596,9 @@ export class Thread {
   private _tools?: ToolDefinition[]
   private _maxTokens?: number
   private _temperature?: number
+  private _memoryManager?: MemoryManager
+  private _id?: string
+  private _autoPersist = false
 
   constructor(AgentClass?: new () => Agent) {
     if (AgentClass) {
@@ -624,11 +631,55 @@ export class Thread {
     return this
   }
 
+  /**
+   * Enable memory management with optional config overrides.
+   *
+   * When enabled, the thread automatically:
+   * - Tracks token usage against the context window budget
+   * - Compacts older messages into summaries when approaching the limit
+   * - Extracts and injects semantic facts into the system prompt
+   *
+   * Memory is opt-in — without calling `.memory()`, Thread behaves
+   * exactly as before (sends full messages array every turn).
+   */
+  memory(config?: Partial<MemoryConfig>): this {
+    const memConfig: MemoryConfig = { ...BrainManager.memoryConfig, ...config }
+    const providerName = this._provider ?? BrainManager.config.default
+    const providerConfig = BrainManager.config.providers[providerName]
+    const model = this._model ?? providerConfig?.model ?? ''
+    const budget = new ContextBudget(memConfig, model)
+    this._memoryManager = new MemoryManager(memConfig, budget)
+    return this
+  }
+
+  /** Set a thread ID (required for persistence). */
+  id(threadId: string): this {
+    this._id = threadId
+    return this
+  }
+
+  /** Enable auto-persistence to the configured ThreadStore after each send(). */
+  persist(auto = true): this {
+    this._autoPersist = auto
+    return this
+  }
+
+  /** Access the semantic memory (facts), if memory management is enabled. */
+  get facts(): SemanticMemory | undefined {
+    return this._memoryManager?.facts
+  }
+
+  /** Get the current episodic summary, if memory management is enabled. */
+  get episodicSummary(): string | undefined {
+    return this._memoryManager?.episodicSummary
+  }
+
   /** Send a message and get the assistant's response. Handles tool calls automatically. */
   async send(message: string): Promise<string> {
     const config = BrainManager.config
     const providerName = this._provider ?? config.default
     const providerConfig = config.providers[providerName]
+    const model = this._model ?? providerConfig?.model ?? ''
 
     this.messages.push({ role: 'user', content: message })
 
@@ -638,10 +689,24 @@ export class Thread {
     while (iterations < maxIterations) {
       iterations++
 
+      let contextSystem = this._system
+      let contextMessages = [...this.messages]
+
+      // Memory management: prepare context within budget
+      if (this._memoryManager) {
+        const prepared = await this._memoryManager.prepareContext(
+          this._system,
+          this.messages,
+          { provider: providerName, model }
+        )
+        contextSystem = prepared.system
+        contextMessages = prepared.messages
+      }
+
       const request: CompletionRequest = {
-        model: this._model ?? providerConfig?.model ?? '',
-        messages: [...this.messages],
-        system: this._system,
+        model,
+        messages: contextMessages,
+        system: contextSystem,
         maxTokens: this._maxTokens ?? config.maxTokens,
         temperature: this._temperature ?? config.temperature,
       }
@@ -658,18 +723,20 @@ export class Thread {
 
       // If no tool calls, return
       if (response.stopReason !== 'tool_use' || response.toolCalls.length === 0) {
+        await this.autoPersist()
         return response.content
       }
 
       // Execute tools
       for (const toolCall of response.toolCalls) {
-        const { message } = await executeTool(this._tools, toolCall)
-        this.messages.push(message)
+        const { message: toolMessage } = await executeTool(this._tools, toolCall)
+        this.messages.push(toolMessage)
       }
     }
 
     // Return last assistant content
     const last = [...this.messages].reverse().find(m => m.role === 'assistant')
+    await this.autoPersist()
     return typeof last?.content === 'string' ? last.content : ''
   }
 
@@ -678,6 +745,7 @@ export class Thread {
     const config = BrainManager.config
     const providerName = this._provider ?? config.default
     const providerConfig = config.providers[providerName]
+    const model = this._model ?? providerConfig?.model ?? ''
     const provider = BrainManager.provider(providerName)
 
     this.messages.push({ role: 'user', content: message })
@@ -688,13 +756,27 @@ export class Thread {
     while (iterations < maxIterations) {
       iterations++
 
+      let contextSystem = this._system
+      let contextMessages = [...this.messages]
+
+      // Memory management: prepare context within budget
+      if (this._memoryManager) {
+        const prepared = await this._memoryManager.prepareContext(
+          this._system,
+          this.messages,
+          { provider: providerName, model }
+        )
+        contextSystem = prepared.system
+        contextMessages = prepared.messages
+      }
+
       let fullText = ''
       const pendingToolCalls: Map<number, { id: string; name: string; args: string }> = new Map()
 
       for await (const chunk of provider.stream({
-        model: this._model ?? providerConfig?.model ?? '',
-        messages: [...this.messages],
-        system: this._system,
+        model,
+        messages: contextMessages,
+        system: contextSystem,
         tools: this._tools,
         maxTokens: this._maxTokens ?? config.maxTokens,
         temperature: this._temperature ?? config.temperature,
@@ -735,7 +817,10 @@ export class Thread {
       })
 
       // No tool calls — done
-      if (toolCalls.length === 0) return
+      if (toolCalls.length === 0) {
+        await this.autoPersist()
+        return
+      }
 
       // Execute tools
       for (const toolCall of toolCalls) {
@@ -743,6 +828,8 @@ export class Thread {
         this.messages.push(toolMessage)
       }
     }
+
+    await this.autoPersist()
   }
 
   /** Get a copy of all messages in this thread. */
@@ -765,9 +852,54 @@ export class Thread {
     return this
   }
 
-  /** Clear all messages from the thread. */
+  /**
+   * Extended serialization that includes memory state (summary, facts).
+   * Use this instead of serialize() when memory management is enabled.
+   */
+  serializeMemory(): SerializedMemoryThread {
+    const memState = this._memoryManager?.serialize()
+    return {
+      id: this._id ?? crypto.randomUUID(),
+      messages: [...this.messages],
+      system: this._system,
+      summary: memState?.summary,
+      facts: memState?.facts,
+      updatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    }
+  }
+
+  /**
+   * Restore from extended serialization that includes memory state.
+   * Use this instead of restore() when memory management is enabled.
+   */
+  restoreMemory(data: SerializedMemoryThread): this {
+    this.messages = [...data.messages]
+    this._system = data.system
+    this._id = data.id
+
+    if (this._memoryManager && (data.summary || data.facts)) {
+      this._memoryManager.restore({
+        summary: data.summary,
+        facts: data.facts,
+      })
+    }
+
+    return this
+  }
+
+  /** Clear all messages and memory state from the thread. */
   clear(): this {
     this.messages = []
     return this
+  }
+
+  // ── Private ────────────────────────────────────────────────────────────────
+
+  /** Persist the thread if auto-persist is enabled and a store is configured. */
+  private async autoPersist(): Promise<void> {
+    if (this._autoPersist && this._id && BrainManager.threadStore) {
+      await BrainManager.threadStore.save(this.serializeMemory())
+    }
   }
 }

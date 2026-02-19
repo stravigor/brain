@@ -37,3 +37,6 @@ export type {
 } from './types.ts'
 export type { ChatOptions, GenerateOptions, GenerateResult, EmbedOptions } from './helpers.ts'
 export type { WorkflowContext } from './workflow.ts'
+
+// Memory
+export * from './memory/index.ts'
