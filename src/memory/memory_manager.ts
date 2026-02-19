@@ -142,7 +142,9 @@ export class MemoryManager {
     }
 
     if (this._summary) {
-      parts.push(`<conversation_history_summary>\n${this._summary}\n</conversation_history_summary>`)
+      parts.push(
+        `<conversation_history_summary>\n${this._summary}\n</conversation_history_summary>`
+      )
     }
 
     const factsBlock = this._semanticMemory.toPromptBlock()

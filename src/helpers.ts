@@ -694,11 +694,10 @@ export class Thread {
 
       // Memory management: prepare context within budget
       if (this._memoryManager) {
-        const prepared = await this._memoryManager.prepareContext(
-          this._system,
-          this.messages,
-          { provider: providerName, model }
-        )
+        const prepared = await this._memoryManager.prepareContext(this._system, this.messages, {
+          provider: providerName,
+          model,
+        })
         contextSystem = prepared.system
         contextMessages = prepared.messages
       }
@@ -761,11 +760,10 @@ export class Thread {
 
       // Memory management: prepare context within budget
       if (this._memoryManager) {
-        const prepared = await this._memoryManager.prepareContext(
-          this._system,
-          this.messages,
-          { provider: providerName, model }
-        )
+        const prepared = await this._memoryManager.prepareContext(this._system, this.messages, {
+          provider: providerName,
+          model,
+        })
         contextSystem = prepared.system
         contextMessages = prepared.messages
       }

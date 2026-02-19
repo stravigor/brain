@@ -34,8 +34,9 @@ export class InMemoryThreadStore implements ThreadStore {
   }
 
   async list(options?: { limit?: number; offset?: number }): Promise<SerializedMemoryThread[]> {
-    const all = Array.from(this.threads.values())
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    const all = Array.from(this.threads.values()).sort((a, b) =>
+      b.updatedAt.localeCompare(a.updatedAt)
+    )
 
     const offset = options?.offset ?? 0
     const limit = options?.limit ?? all.length

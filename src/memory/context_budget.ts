@@ -40,12 +40,7 @@ export class ContextBudget {
   }
 
   /** Check whether the current context fits within the token budget. */
-  fits(
-    system: string | undefined,
-    summary: string,
-    facts: Fact[],
-    messages: Message[]
-  ): boolean {
+  fits(system: string | undefined, summary: string, facts: Fact[], messages: Message[]): boolean {
     const bd = this.breakdown(system, summary, facts, messages)
     return bd.remaining >= 0
   }
@@ -61,9 +56,8 @@ export class ContextBudget {
     const response = Math.ceil(total * this.responseReserve)
 
     const systemTokens = TokenCounter.estimate(system ?? '')
-    const factsTokens = facts.length > 0
-      ? TokenCounter.estimate(SemanticMemory.formatFacts(facts))
-      : 0
+    const factsTokens =
+      facts.length > 0 ? TokenCounter.estimate(SemanticMemory.formatFacts(facts)) : 0
     const systemTotal = systemTokens + factsTokens
 
     const summaryTokens = TokenCounter.estimate(summary)
@@ -101,9 +95,8 @@ export class ContextBudget {
     const total = this.maxTokens
     const response = Math.ceil(total * this.responseReserve)
     const systemTokens = TokenCounter.estimate(system ?? '')
-    const factsTokens = facts.length > 0
-      ? TokenCounter.estimate(SemanticMemory.formatFacts(facts))
-      : 0
+    const factsTokens =
+      facts.length > 0 ? TokenCounter.estimate(SemanticMemory.formatFacts(facts)) : 0
     const summaryTokens = TokenCounter.estimate(summary)
 
     const available = total - response - systemTokens - factsTokens - summaryTokens

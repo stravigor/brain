@@ -56,9 +56,10 @@ export class SummarizeStrategy implements CompactionStrategy {
 
     let prompt: string
     if (options.existingSummary) {
-      prompt = MERGE_PROMPT
-        .replace('{{existingSummary}}', options.existingSummary)
-        .replace('{{messages}}', messagesText)
+      prompt = MERGE_PROMPT.replace('{{existingSummary}}', options.existingSummary).replace(
+        '{{messages}}',
+        messagesText
+      )
     } else {
       prompt = SUMMARIZE_PROMPT.replace('{{messages}}', messagesText)
     }
@@ -75,7 +76,10 @@ export class SummarizeStrategy implements CompactionStrategy {
       temperature: 0.3,
     })
 
-    const { summary, facts } = SummarizeStrategy.parseResponse(response.content, options.extractFacts)
+    const { summary, facts } = SummarizeStrategy.parseResponse(
+      response.content,
+      options.extractFacts
+    )
 
     return {
       summary,
@@ -90,12 +94,13 @@ export class SummarizeStrategy implements CompactionStrategy {
 
     for (const msg of messages) {
       const role = msg.role.charAt(0).toUpperCase() + msg.role.slice(1)
-      const content = typeof msg.content === 'string'
-        ? msg.content
-        : msg.content
-            .filter(b => b.type === 'text' && b.text)
-            .map(b => b.text)
-            .join('\n')
+      const content =
+        typeof msg.content === 'string'
+          ? msg.content
+          : msg.content
+              .filter(b => b.type === 'text' && b.text)
+              .map(b => b.text)
+              .join('\n')
 
       if (content) {
         lines.push(`${role}: ${content}`)
@@ -126,7 +131,11 @@ export class SummarizeStrategy implements CompactionStrategy {
     let facts: Fact[] = []
     if (factsMatch?.[1]) {
       try {
-        const parsed = JSON.parse(factsMatch[1]) as Array<{ key: string; value: string; confidence?: number }>
+        const parsed = JSON.parse(factsMatch[1]) as Array<{
+          key: string
+          value: string
+          confidence?: number
+        }>
         facts = parsed.map(f => ({
           key: f.key,
           value: f.value,

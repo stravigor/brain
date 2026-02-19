@@ -15,7 +15,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gpt-4.1': 1_000_000,
   'gpt-4.1-mini': 1_000_000,
   'gpt-4.1-nano': 1_000_000,
-  'o3': 200_000,
+  o3: 200_000,
   'o3-mini': 200_000,
   'o4-mini': 200_000,
 
