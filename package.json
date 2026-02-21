@@ -19,7 +19,7 @@
     "@stravigor/workflow": "workspace:*"
   },
   "dependencies": {
-    "zod": "^3.25 || ^4.0"
+    "zod": "^4.0"
   },
   "scripts": {
     "test": "bun test tests/",

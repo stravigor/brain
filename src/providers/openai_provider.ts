@@ -236,7 +236,10 @@ export class OpenAIProvider implements AIProvider {
 
     // Structured output
     if (request.schema) {
-      const useStrict = this.supportsJsonSchema && this.isStrictCompatible(request.schema)
+      const model = (body.model as string) ?? ''
+      // Reasoning models (o-series, gpt-5) don't reliably support json_schema strict mode;
+      // use json_object fallback with schema hint in system prompt instead.
+      const useStrict = this.supportsJsonSchema && !this.isReasoningModel(model) && this.isStrictCompatible(request.schema)
 
       if (useStrict) {
         body.response_format = {
@@ -308,6 +311,13 @@ export class OpenAIProvider implements AIProvider {
   }
 
   private parseResponse(data: any): CompletionResponse {
+    // Detect API-level error payloads (e.g. unsupported parameters, invalid model)
+    if (data.error) {
+      const code = data.error.type ?? data.error.code ?? 'error'
+      const msg = data.error.message ?? JSON.stringify(data.error)
+      throw new ExternalServiceError('OpenAI', undefined, `[${code}] ${msg}`)
+    }
+
     const choice = data.choices?.[0]
     const message = choice?.message
 

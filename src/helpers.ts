@@ -159,6 +159,18 @@ export const brain = {
       temperature: options.temperature ?? config.temperature,
     })
 
+    if (!response.content) {
+      const raw = response.raw as any
+      const refusal = raw?.choices?.[0]?.message?.refusal
+      const finishReason = raw?.choices?.[0]?.finish_reason
+      if (refusal) {
+        throw new Error(`LLM refused structured generation: ${refusal}`)
+      }
+      throw new Error(
+        `LLM returned empty content for structured generation (finish_reason: ${finishReason ?? 'unknown'})`
+      )
+    }
+
     const parsed = JSON.parse(response.content)
     const data = options.schema?.parse ? options.schema.parse(parsed) : parsed
 

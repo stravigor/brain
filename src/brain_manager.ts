@@ -36,14 +36,14 @@ export default class BrainManager {
 
   constructor(config: Configuration) {
     BrainManager._config = {
-      default: config.get('ai.default', 'anthropic') as string,
-      providers: config.get('ai.providers', {}) as Record<string, ProviderConfig>,
-      maxTokens: config.get('ai.maxTokens', 4096) as number,
-      temperature: config.get('ai.temperature', 0.7) as number,
-      maxIterations: config.get('ai.maxIterations', 10) as number,
+      default: config.get('brain.default', 'anthropic') as string,
+      providers: config.get('brain.providers', {}) as Record<string, ProviderConfig>,
+      maxTokens: config.get('brain.maxTokens', 4096) as number,
+      temperature: config.get('brain.temperature', 0.7) as number,
+      maxIterations: config.get('brain.maxIterations', 10) as number,
     }
 
-    BrainManager._memoryConfig = config.get('ai.memory', {}) as MemoryConfig
+    BrainManager._memoryConfig = config.get('brain.memory', {}) as MemoryConfig
 
     for (const [name, providerConfig] of Object.entries(BrainManager._config.providers)) {
       BrainManager._providers.set(name, BrainManager.createProvider(name, providerConfig))

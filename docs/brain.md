@@ -27,10 +27,12 @@ for await (const chunk of brain.stream('Write a haiku about code')) {
 
 ### Using a service provider (recommended)
 
+Add to `start/providers.ts`:
+
 ```typescript
 import { BrainProvider } from '@stravigor/brain'
 
-app.use(new BrainProvider())
+new BrainProvider(),
 ```
 
 The `BrainProvider` registers `BrainManager` as a singleton. It depends on the `config` provider.
